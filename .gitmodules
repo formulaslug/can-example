@@ -1,0 +1,3 @@
+[submodule "src/fs-0-core"]
+	path = src/fs-0-core
+	url = https://github.com/formulaslug/fs-0-core
