@@ -2,11 +2,11 @@
 
 #include <stdint.h>
 
-#include <array>
 #include <memory>
 
 #include <IntervalTimer.h>
 
+#include "Timer.h"
 #include "fs-0-core/CANopen.h"
 #include "fs-0-core/CANopenPDO.h"
 #include "fs-0-core/InterruptMutex.h"
@@ -14,54 +14,14 @@
 
 // timer interrupt handlers
 void _1sISR();
-void _100msISR();
 void _20msISR();
 void _3msISR();
 
 // contains and controls all CAN related functions
 static std::unique_ptr<CANopen> g_canBus;
 
-/**
- * If the range is ordered as (min, max), minimum input values map to 0.
- * If the range is ordered as (max, min), maximum input values map to 1.
- *
- * @param range Range of input value
- * @param input Value within range
- * @return Normalized value between 0 and 1 inclusive
- */
-double normalize(const std::array<double, 2> range, double input) {
-  return (input - range[0]) / (range[1] - range[0]);
-}
-
 int main() {
-  const std::array<uint8_t, 2> buttonPins{7, 8};
-  const std::array<uint8_t, 1> analogInputPins{9};
-
   Serial.begin(115200);
-
-  // Configure input pins
-  pinMode(A1, INPUT);
-  pinMode(A3, INPUT);
-  pinMode(A0, INPUT);
-  pinMode(22, INPUT_PULLUP);
-  pinMode(23, INPUT_PULLUP);
-
-  // Turn off startup sound
-  pinMode(20, OUTPUT);
-  digitalWriteFast(20, LOW);
-
-  // Turn off brake light
-  pinMode(21, OUTPUT);
-  digitalWriteFast(21, LOW);
-
-  // Init buttons
-  for (auto& buttonPin : buttonPins) {
-    pinMode(buttonPin, INPUT);
-  }
-  // Init digital inputs (ADC)
-  for (auto& inputPin : analogInputPins) {
-    pinMode(inputPin, INPUT);
-  }
 
   constexpr uint32_t kID = 0x680;
   constexpr uint32_t kBaudRate = 250000;
@@ -69,9 +29,6 @@ int main() {
 
   IntervalTimer _1sInterrupt;
   _1sInterrupt.begin(_1sISR, 1000000);
-
-  IntervalTimer _100msInterrupt;
-  _100msInterrupt.begin(_100msISR, 100000);
 
   IntervalTimer _20msInterrupt;
   _20msInterrupt.begin(_20msISR, 20000);
@@ -81,15 +38,20 @@ int main() {
 
   InterruptMutex interruptMut;
 
+  Timer softTimer(250);
+
   while (1) {
-    {
+    if (softTimer.isExpired()) {
       std::lock_guard<InterruptMutex> lock(interruptMut);
 
       // print all transmitted messages
       g_canBus->printTxAll();
+
       // print all received messages
       g_canBus->printRxAll();
     }
+
+    softTimer.update();
   }
 }
 
@@ -100,20 +62,6 @@ void _1sISR() {
   // enqueue heartbeat message to g_canTxQueue
   const HeartbeatMessage heartbeatMessage(kCobid_node3Heartbeat);
   g_canBus->queueTxMessage(heartbeatMessage);
-}
-
-/**
- * @desc Performs periodic tasks every 1/10 second
- */
-void _100msISR() {
-  double leftThrottle = normalize({500, 750}, analogRead(A0));
-  double rightThrottle = normalize({550, 295}, analogRead(A3));
-  double throttle = (leftThrottle + rightThrottle) / 2;
-  bool driveButton = digitalReadFast(23);
-
-  // enqueue throttle voltage periodically as well
-  const ThrottleMessage throttleMessage(65536 * throttle, driveButton);
-  g_canBus->queueTxMessage(throttleMessage);
 }
 
 /**
